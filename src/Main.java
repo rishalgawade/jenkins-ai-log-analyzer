@@ -6,4 +6,5 @@ public class Main {
         System.out.println("End of program.");
     }
 }
+
 // Trigger Jenkins AI test
