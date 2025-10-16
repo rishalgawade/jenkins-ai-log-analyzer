@@ -37,7 +37,7 @@ pipeline {
       // run analysis using python docker image so no python needed on Jenkins host
       sh '''
       docker run --rm -v "$PWD":/workspace -w /workspace python:3.11 \
-        bash -lc "pip install requests || true; python3 scripts/ai-analyzer/scripts/analyze_log.py logs/build_log.txt logs/analysis.txt"
+        bash -lc "pip install requests || true; python3 scripts/analyze_log.py logs/build_log.txt logs/analysis.txt"
       ''' || true
 
       script {
