@@ -25,4 +25,4 @@ Builds are triggered automatically via GitHub webhooks on:
 - Jenkins with Pipeline support
 - Python 3.8+
 - Google Gemini API key
-- GitHub Personal Access Token
+- GitHub Personal Access Token# Testing NullPointerException detection
