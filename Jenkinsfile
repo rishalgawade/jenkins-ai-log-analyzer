@@ -12,30 +12,20 @@ pipeline {
         GITHUB_PR_NUMBER = "${env.CHANGE_ID ?: ''}"
         GITHUB_REPO = "rishalgawade/jenkins-ai-log-analyzer"
         GIT_BRANCH = "${env.BRANCH_NAME ?: 'main'}"
+        GITHUB_COMMIT = "${env.GIT_COMMIT}"
     }
     
     options {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
         ansiColor('xterm')
-        
-        // Enable GitHub status notifications
-        gitHubStatusContext('continuous-integration/jenkins')
+        // Removed gitHubStatusContext - it's not a valid option
     }
     
     stages {
         stage('Checkout') {
             steps {
                 script {
-                    // Set GitHub status to pending
-                    if (env.CHANGE_ID) {
-                        setGitHubPullRequestStatus(
-                            context: 'Jenkins Build',
-                            message: 'Build in progress...',
-                            state: 'PENDING'
-                        )
-                    }
-                    
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "📥 CHECKING OUT CODE"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -44,6 +34,7 @@ pipeline {
                     
                     if (env.CHANGE_ID) {
                         echo "Pull Request: #${env.CHANGE_ID}"
+                        updateGitHubStatus('pending', 'Build in progress...')
                     }
                 }
                 
@@ -79,13 +70,9 @@ pipeline {
     post {
         failure {
             script {
-                // Set GitHub status to failure
+                // Update GitHub status to failure
                 if (env.CHANGE_ID) {
-                    setGitHubPullRequestStatus(
-                        context: 'Jenkins Build',
-                        message: 'Build failed - AI analysis available',
-                        state: 'FAILURE'
-                    )
+                    updateGitHubStatus('failure', 'Build failed - AI analysis available')
                 }
                 
                 echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -112,12 +99,14 @@ pipeline {
                                     ${ANALYSIS_OUTPUT} || echo "⚠️  Analysis failed"
                             """
                         } else {
+                            echo "⚠️  Using simple analyzer (no GitHub comment)"
                             sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                         }
                     } else {
                         sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                     }
                     
+                    // Display analysis in Jenkins console
                     def analysisExists = fileExists("${ANALYSIS_OUTPUT}")
                     if (analysisExists) {
                         echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -132,7 +121,7 @@ pipeline {
                                      onlyIfSuccessful: false
                     
                     if (env.CHANGE_ID) {
-                        echo "\n💬 Check PR for AI comment: https://github.com/${GITHUB_REPO}/pull/${env.CHANGE_ID}"
+                        echo "\n💬 Check GitHub PR: https://github.com/${GITHUB_REPO}/pull/${env.CHANGE_ID}"
                     }
                 }
             }
@@ -140,22 +129,50 @@ pipeline {
         
         success {
             script {
-                // Set GitHub status to success
+                // Update GitHub status to success
                 if (env.CHANGE_ID) {
-                    setGitHubPullRequestStatus(
-                        context: 'Jenkins Build',
-                        message: 'Build passed successfully',
-                        state: 'SUCCESS'
-                    )
+                    updateGitHubStatus('success', 'Build passed successfully!')
                 }
                 
-                echo "\n✅ BUILD SUCCESSFUL 🎉"
-                archiveArtifacts artifacts: 'build_log.txt', allowEmptyArchive: true
+                echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "✅ BUILD SUCCESSFUL 🎉"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                
+                archiveArtifacts artifacts: 'build_log.txt', 
+                                 allowEmptyArchive: true,
+                                 onlyIfSuccessful: true
             }
         }
         
         always {
             echo "\n🏁 Pipeline completed - Build #${env.BUILD_NUMBER}"
+            echo "Duration: ${currentBuild.durationString}"
         }
+    }
+}
+
+// Helper function to update GitHub commit status
+def updateGitHubStatus(String state, String description) {
+    if (!env.GITHUB_COMMIT) {
+        echo "⚠️  No commit SHA available, skipping status update"
+        return
+    }
+    
+    try {
+        sh """
+            curl -X POST \
+            -H "Authorization: token \${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${GITHUB_REPO}/statuses/${env.GITHUB_COMMIT} \
+            -d '{
+                "state": "${state}",
+                "target_url": "${env.BUILD_URL}console",
+                "description": "${description}",
+                "context": "continuous-integration/jenkins"
+            }' || echo "Failed to update GitHub status"
+        """
+        echo "✅ GitHub status updated: ${state}"
+    } catch (Exception e) {
+        echo "⚠️  Failed to update GitHub status: ${e.message}"
     }
 }
