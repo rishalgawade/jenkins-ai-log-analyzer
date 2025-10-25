@@ -31,7 +31,6 @@ pipeline {
                 }
                 
                 checkout scm
-                
                 sh 'git log -1 --oneline'
             }
         }
@@ -40,17 +39,27 @@ pipeline {
             steps {
                 script {
                     echo "🔨 Running build..."
+                    
+                    // Capture output to file AND show in console
+                    sh '''
+                        if [ -f build.sh ]; then
+                            chmod +x build.sh
+                            
+                            # Run build, save output to file, and display it
+                            ./build.sh > ${BUILD_LOG} 2>&1
+                            EXIT_CODE=$?
+                            
+                            # Display the log in Jenkins console
+                            cat ${BUILD_LOG}
+                            
+                            # Exit with the same code as build.sh
+                            exit $EXIT_CODE
+                        else
+                            echo "ERROR: build.sh not found" | tee ${BUILD_LOG}
+                            exit 1
+                        fi
+                    '''
                 }
-                
-                sh '''
-                    if [ -f build.sh ]; then
-                        chmod +x build.sh
-                        ./build.sh 2>&1 | tee ${BUILD_LOG}
-                    else
-                        echo "ERROR: build.sh not found" | tee ${BUILD_LOG}
-                        exit 1
-                    fi
-                '''
             }
         }
     }
@@ -58,29 +67,73 @@ pipeline {
     post {
         failure {
             script {
-                echo "\n❌ BUILD FAILED - Running AI Analysis"
+                echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "❌ BUILD FAILED"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "🤖 Initiating AI-powered log analysis...\n"
                 
-                sh """
-                    if [ -f "${ANALYZER_SCRIPT}" ]; then
-                        python3 ${ANALYZER_SCRIPT} ${BUILD_LOG} ${ANALYSIS_OUTPUT}
+                def logExists = fileExists("${BUILD_LOG}")
+                
+                if (logExists) {
+                    echo "✅ Build log captured successfully"
+                    
+                    def scriptExists = fileExists("${ANALYZER_SCRIPT}")
+                    
+                    if (scriptExists) {
+                        sh """
+                            echo "🤖 Running AI analysis..."
+                            python3 ${ANALYZER_SCRIPT} \
+                                ${BUILD_LOG} \
+                                ${ANALYSIS_OUTPUT} || echo "AI analysis failed but continuing..."
+                        """
                         
-                        if [ -f "${ANALYSIS_OUTPUT}" ]; then
-                            echo "\n📊 AI ANALYSIS:"
-                            cat ${ANALYSIS_OUTPUT}
-                        fi
-                    else
-                        echo "❌ Analyzer script not found"
-                    fi
-                """
-                
-                archiveArtifacts artifacts: 'analysis.txt, build_log.txt',
-                                 allowEmptyArchive: true
+                        def analysisExists = fileExists("${ANALYSIS_OUTPUT}")
+                        if (analysisExists) {
+                            echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "📊 AI ANALYSIS RESULTS"
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                            def analysis = readFile("${ANALYSIS_OUTPUT}")
+                            echo analysis
+                            echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        }
+                        
+                        archiveArtifacts artifacts: 'analysis.txt, build_log.txt',
+                                         allowEmptyArchive: true,
+                                         onlyIfSuccessful: false
+                        
+                        echo "\n✅ Analysis complete!"
+                        echo "📦 Artifacts: ${env.BUILD_URL}artifact/"
+                        
+                    } else {
+                        echo "❌ AI analyzer script not found at ${ANALYZER_SCRIPT}"
+                    }
+                } else {
+                    echo "⚠️  Build log not found at ${BUILD_LOG}"
+                }
             }
         }
         
         success {
-            echo "✅ BUILD SUCCESSFUL"
-            archiveArtifacts artifacts: 'build_log.txt', allowEmptyArchive: true
+            script {
+                echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "✅ BUILD SUCCESSFUL"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                
+                def logExists = fileExists("${BUILD_LOG}")
+                if (logExists) {
+                    archiveArtifacts artifacts: 'build_log.txt',
+                                     allowEmptyArchive: true,
+                                     onlyIfSuccessful: true
+                }
+                
+                echo "🎉 All tests passed!"
+            }
+        }
+        
+        always {
+            echo "\n🏁 Pipeline execution completed"
+            echo "Build #${env.BUILD_NUMBER}"
+            echo "Duration: ${currentBuild.durationString}"
         }
     }
 }
