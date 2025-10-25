@@ -9,7 +9,6 @@ pipeline {
         ANALYZER_SCRIPT = "/var/jenkins_home/ai-log-analyzer/analyze_and_comment.py"
         ANALYZER_SCRIPT_SIMPLE = "/var/jenkins_home/ai-log-analyzer/analyze_log.py"
         
-        // Automatically detect PR number (works with Multibranch Pipeline)
         GITHUB_PR_NUMBER = "${env.CHANGE_ID ?: ''}"
         GITHUB_REPO = "rishalgawade/jenkins-ai-log-analyzer"
         GIT_BRANCH = "${env.BRANCH_NAME ?: 'main'}"
@@ -19,12 +18,24 @@ pipeline {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
         ansiColor('xterm')
+        
+        // Enable GitHub status notifications
+        gitHubStatusContext('continuous-integration/jenkins')
     }
     
     stages {
         stage('Checkout') {
             steps {
                 script {
+                    // Set GitHub status to pending
+                    if (env.CHANGE_ID) {
+                        setGitHubPullRequestStatus(
+                            context: 'Jenkins Build',
+                            message: 'Build in progress...',
+                            state: 'PENDING'
+                        )
+                    }
+                    
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "📥 CHECKING OUT CODE"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -33,10 +44,6 @@ pipeline {
                     
                     if (env.CHANGE_ID) {
                         echo "Pull Request: #${env.CHANGE_ID}"
-                        echo "PR Title: ${env.CHANGE_TITLE}"
-                        echo "PR Author: ${env.CHANGE_AUTHOR}"
-                    } else {
-                        echo "Build Type: Branch build (not a PR)"
                     }
                 }
                 
@@ -72,6 +79,15 @@ pipeline {
     post {
         failure {
             script {
+                // Set GitHub status to failure
+                if (env.CHANGE_ID) {
+                    setGitHubPullRequestStatus(
+                        context: 'Jenkins Build',
+                        message: 'Build failed - AI analysis available',
+                        state: 'FAILURE'
+                    )
+                }
+                
                 echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo "❌ BUILD FAILED"
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -82,7 +98,6 @@ pipeline {
                 if (logExists) {
                     echo "✅ Build log captured"
                     
-                    // Check if this is a PR build
                     if (env.CHANGE_ID) {
                         echo "📝 Posting AI analysis to GitHub PR #${env.CHANGE_ID}..."
                         
@@ -90,7 +105,6 @@ pipeline {
                         
                         if (scriptExists) {
                             sh """
-                                echo "🤖 Running AI analysis with GitHub integration..."
                                 python3 ${ANALYZER_SCRIPT} \
                                     ${BUILD_LOG} \
                                     ${GITHUB_REPO} \
@@ -98,15 +112,12 @@ pipeline {
                                     ${ANALYSIS_OUTPUT} || echo "⚠️  Analysis failed"
                             """
                         } else {
-                            echo "⚠️  GitHub comment script not found"
                             sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                         }
                     } else {
-                        echo "ℹ️  Not a PR build - skipping GitHub comment"
                         sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                     }
                     
-                    // Display in console
                     def analysisExists = fileExists("${ANALYSIS_OUTPUT}")
                     if (analysisExists) {
                         echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -121,15 +132,26 @@ pipeline {
                                      onlyIfSuccessful: false
                     
                     if (env.CHANGE_ID) {
-                        echo "\n💬 AI analysis posted to: https://github.com/${GITHUB_REPO}/pull/${env.CHANGE_ID}"
+                        echo "\n💬 Check PR for AI comment: https://github.com/${GITHUB_REPO}/pull/${env.CHANGE_ID}"
                     }
                 }
             }
         }
         
         success {
-            echo "\n✅ BUILD SUCCESSFUL 🎉"
-            archiveArtifacts artifacts: 'build_log.txt', allowEmptyArchive: true
+            script {
+                // Set GitHub status to success
+                if (env.CHANGE_ID) {
+                    setGitHubPullRequestStatus(
+                        context: 'Jenkins Build',
+                        message: 'Build passed successfully',
+                        state: 'SUCCESS'
+                    )
+                }
+                
+                echo "\n✅ BUILD SUCCESSFUL 🎉"
+                archiveArtifacts artifacts: 'build_log.txt', allowEmptyArchive: true
+            }
         }
         
         always {
