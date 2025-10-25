@@ -6,13 +6,13 @@ pipeline {
         GITHUB_TOKEN = credentials('github-token')
         BUILD_LOG = "${WORKSPACE}/build_log.txt"
         ANALYSIS_OUTPUT = "${WORKSPACE}/analysis.txt"
-        ANALYZER_SCRIPT = "/var/jenkins_home/ai-log-analyzer/analyze_log.py"
-    }
-    
-    parameters {
-        string(name: 'GITHUB_PR_NUMBER', defaultValue: '', description: 'Pull Request Number')
-        string(name: 'GITHUB_REPO', defaultValue: 'rishalgawade/jenkins-ai-log-analyzer', description: 'GitHub Repository')
-        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to build')
+        ANALYZER_SCRIPT = "/var/jenkins_home/ai-log-analyzer/analyze_and_comment.py"
+        ANALYZER_SCRIPT_SIMPLE = "/var/jenkins_home/ai-log-analyzer/analyze_log.py"
+        
+        // Automatically detect PR number (works with Multibranch Pipeline)
+        GITHUB_PR_NUMBER = "${env.CHANGE_ID ?: ''}"
+        GITHUB_REPO = "rishalgawade/jenkins-ai-log-analyzer"
+        GIT_BRANCH = "${env.BRANCH_NAME ?: 'main'}"
     }
     
     options {
@@ -25,9 +25,19 @@ pipeline {
         stage('Checkout') {
             steps {
                 script {
-                    echo "🔄 Checking out code..."
-                    echo "Repository: ${params.GITHUB_REPO}"
-                    echo "Branch: ${params.GIT_BRANCH}"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📥 CHECKING OUT CODE"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Repository: ${GITHUB_REPO}"
+                    echo "Branch: ${GIT_BRANCH}"
+                    
+                    if (env.CHANGE_ID) {
+                        echo "Pull Request: #${env.CHANGE_ID}"
+                        echo "PR Title: ${env.CHANGE_TITLE}"
+                        echo "PR Author: ${env.CHANGE_AUTHOR}"
+                    } else {
+                        echo "Build Type: Branch build (not a PR)"
+                    }
                 }
                 
                 checkout scm
@@ -38,28 +48,23 @@ pipeline {
         stage('Build & Test') {
             steps {
                 script {
-                    echo "🔨 Running build..."
-                    
-                    // Capture output to file AND show in console
-                    sh '''
-                        if [ -f build.sh ]; then
-                            chmod +x build.sh
-                            
-                            # Run build, save output to file, and display it
-                            ./build.sh > ${BUILD_LOG} 2>&1
-                            EXIT_CODE=$?
-                            
-                            # Display the log in Jenkins console
-                            cat ${BUILD_LOG}
-                            
-                            # Exit with the same code as build.sh
-                            exit $EXIT_CODE
-                        else
-                            echo "ERROR: build.sh not found" | tee ${BUILD_LOG}
-                            exit 1
-                        fi
-                    '''
+                    echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "🔨 BUILDING PROJECT"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 }
+                
+                sh '''
+                    if [ -f build.sh ]; then
+                        chmod +x build.sh
+                        ./build.sh > ${BUILD_LOG} 2>&1
+                        EXIT_CODE=$?
+                        cat ${BUILD_LOG}
+                        exit $EXIT_CODE
+                    else
+                        echo "ERROR: build.sh not found" | tee ${BUILD_LOG}
+                        exit 1
+                    fi
+                '''
             }
         }
     }
@@ -75,65 +80,60 @@ pipeline {
                 def logExists = fileExists("${BUILD_LOG}")
                 
                 if (logExists) {
-                    echo "✅ Build log captured successfully"
+                    echo "✅ Build log captured"
                     
-                    def scriptExists = fileExists("${ANALYZER_SCRIPT}")
-                    
-                    if (scriptExists) {
-                        sh """
-                            echo "🤖 Running AI analysis..."
-                            python3 ${ANALYZER_SCRIPT} \
-                                ${BUILD_LOG} \
-                                ${ANALYSIS_OUTPUT} || echo "AI analysis failed but continuing..."
-                        """
+                    // Check if this is a PR build
+                    if (env.CHANGE_ID) {
+                        echo "📝 Posting AI analysis to GitHub PR #${env.CHANGE_ID}..."
                         
-                        def analysisExists = fileExists("${ANALYSIS_OUTPUT}")
-                        if (analysisExists) {
-                            echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                            echo "📊 AI ANALYSIS RESULTS"
-                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                            def analysis = readFile("${ANALYSIS_OUTPUT}")
-                            echo analysis
-                            echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        def scriptExists = fileExists("${ANALYZER_SCRIPT}")
+                        
+                        if (scriptExists) {
+                            sh """
+                                echo "🤖 Running AI analysis with GitHub integration..."
+                                python3 ${ANALYZER_SCRIPT} \
+                                    ${BUILD_LOG} \
+                                    ${GITHUB_REPO} \
+                                    ${env.CHANGE_ID} \
+                                    ${ANALYSIS_OUTPUT} || echo "⚠️  Analysis failed"
+                            """
+                        } else {
+                            echo "⚠️  GitHub comment script not found"
+                            sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                         }
-                        
-                        archiveArtifacts artifacts: 'analysis.txt, build_log.txt',
-                                         allowEmptyArchive: true,
-                                         onlyIfSuccessful: false
-                        
-                        echo "\n✅ Analysis complete!"
-                        echo "📦 Artifacts: ${env.BUILD_URL}artifact/"
-                        
                     } else {
-                        echo "❌ AI analyzer script not found at ${ANALYZER_SCRIPT}"
+                        echo "ℹ️  Not a PR build - skipping GitHub comment"
+                        sh "python3 ${ANALYZER_SCRIPT_SIMPLE} ${BUILD_LOG} ${ANALYSIS_OUTPUT} || true"
                     }
-                } else {
-                    echo "⚠️  Build log not found at ${BUILD_LOG}"
+                    
+                    // Display in console
+                    def analysisExists = fileExists("${ANALYSIS_OUTPUT}")
+                    if (analysisExists) {
+                        echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        echo "📊 AI ANALYSIS RESULTS"
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        echo readFile("${ANALYSIS_OUTPUT}")
+                        echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    }
+                    
+                    archiveArtifacts artifacts: 'analysis.txt, build_log.txt',
+                                     allowEmptyArchive: true,
+                                     onlyIfSuccessful: false
+                    
+                    if (env.CHANGE_ID) {
+                        echo "\n💬 AI analysis posted to: https://github.com/${GITHUB_REPO}/pull/${env.CHANGE_ID}"
+                    }
                 }
             }
         }
         
         success {
-            script {
-                echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "✅ BUILD SUCCESSFUL"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                
-                def logExists = fileExists("${BUILD_LOG}")
-                if (logExists) {
-                    archiveArtifacts artifacts: 'build_log.txt',
-                                     allowEmptyArchive: true,
-                                     onlyIfSuccessful: true
-                }
-                
-                echo "🎉 All tests passed!"
-            }
+            echo "\n✅ BUILD SUCCESSFUL 🎉"
+            archiveArtifacts artifacts: 'build_log.txt', allowEmptyArchive: true
         }
         
         always {
-            echo "\n🏁 Pipeline execution completed"
-            echo "Build #${env.BUILD_NUMBER}"
-            echo "Duration: ${currentBuild.durationString}"
+            echo "\n🏁 Pipeline completed - Build #${env.BUILD_NUMBER}"
         }
     }
 }
